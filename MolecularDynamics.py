@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import scipy
 import scipy.constants
 
-
+print("yea")
 class Simulation:
     k_B = scipy.constants.k
     A = 1e-10
