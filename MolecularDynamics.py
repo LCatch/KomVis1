@@ -2,8 +2,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 import scipy
 import scipy.constants
+from scipy.stats import qmc
 
-print("yea")
+
+# print("yea")
 class Simulation:
     k_B = scipy.constants.k
     A = 1e-10
@@ -29,6 +31,18 @@ class Simulation:
         self.positions = np.zeros([timesteps, n_particles, dims])
         self.velocities = np.zeros([timesteps, n_particles, dims])
         self.F_matrix =  np.zeros([n_particles, n_particles, dims])
+        self.E_potential = np.zeros(timesteps)
+        self.E_kinetic = np.zeros(timesteps)
+        self.E_total = np.zeros(timesteps)
+
+    def set_pseudorandom(self):
+        pos_available = (self.L // 1.5) ** 2
+        if pos_available < self.n_particles:
+            msg = f"Too many particles, default to {pos_available}"
+            print("\033[91m {}\033[00m".format(msg))
+            n_particles = pos_available
+
+        np.random.normal(0, 0.2, [self.n_particles, self.dims])
 
     def set_initial_conditions(self, random=False):
         if self.n_particles > 3:
@@ -37,12 +51,13 @@ class Simulation:
             self.positions[0,:,:] = np.random.uniform(0, self.L, [self.n_particles, self.dims])
             # self.velocities[0,:,:] = np.random.normal(0, 1, [self.n_particles, self.dims])
         else:
-            self.positions[0,0,:] = [2, 1]
-            self.positions[0,1,:] = [2, 2]
+            self.positions[0,0,:] = [1, 1]
+            self.positions[0,1,:] = [1, 2.5]
             if self.n_particles > 2:
-                self.positions[0, 2, :] = [3,4]
-            self.velocities[0,0,:] = [0.1, 0]
-            self.velocities[0,1,:] = [-0.1, 0]
+                self.positions[0, 2, :] = [1,4]
+            # self.velocities[0,0,:] = [0.2, 0]
+            # self.velocities[0,1,:] = [-0.2, 0]
+            self.velocities[0,:,:] = np.random.normal(0, 0.5, [self.n_particles, self.dims])
 
     def U(self, r):
         U = 4*self.epsilon * ((self.sigma/r)**12 - (self.sigma/r)**6)
@@ -53,13 +68,19 @@ class Simulation:
         U_ = 4 * ((1/r)**12 - (1/r)**6)
         return U_
 
+    def get_U(self, xi, xj):
+        dx = (xi - xj + self.L/2) % self.L - self.L/2
+        r = np.sqrt(np.sum(dx * dx))
+        return U_(r)
+
     def grad_U(self, r):
         return 4 * ((-12) * r**(-13) + 6 * r**(-7))
         # return grad_U
 
     def Force_(self, xi, xj):
         # print('pos: ', xi, xj)
-        dx = xi - xj
+        # dx = xi - xj
+        dx = (xi - xj + self.L/2) % self.L - self.L/2
         if self.dims == 1:
             r = dx
         else:
@@ -89,7 +110,7 @@ class Simulation:
         self.positions[ti+1, :, :] = (pos0 + vel0 * self.dt) % self.L
 
         # print("step ", ti, pos0, vel0, self.positions[ti+1, :, :])
-
+        U_tot = 0
         for ni in range(self.n_particles):      # TODO change to iterate over pos-n ?
             for nj in range(self.n_particles):
                 if ni == nj:
@@ -102,21 +123,41 @@ class Simulation:
                     # print("f: ", F)
                     self.F_matrix[ni, nj] = F
                 # F_tot += F
+                # U_tot += get_U(pos0[ni], pos0[nj])
                     # F_matrix[ni, nj] = F_tot
             
             # print(self.F_matrix.shape)
-            self.velocities[ti+1,: , :] = vel0 + self.F_matrix.sum(axis=1) * self.dt / self.m
+        self.E_potential[ti] = U_tot
+        MAX = 1e3
+        self.velocities[ti+1,: , :] = np.clip(vel0 + self.F_matrix.sum(axis=1) * self.dt / self.m, a_min=-MAX, a_max=MAX)
+
+
+    def Verlet_step(self):
+        pass
 
     def plot_positions(self):
+        alphas = np.linspace(0.1, 1, self.timesteps)
+        # print(alpha)
         for ni in range(self.n_particles):
-            plt.scatter(self.positions[:, ni, 0], self.positions[:, ni, 1], marker='.')
+            plt.scatter(self.positions[:, ni, 0], self.positions[:, ni, 1], marker='.',
+                alpha=alphas)
             # plt.scatter(self.positions[1, 0, :], self.positions[1, 1, :], c='r', marker='.')
-            plt.scatter(self.positions[0, ni, 0], self.positions[0, ni, 1], c='k', marker='x')
+            plt.scatter(self.positions[0, ni, 0], self.positions[0, ni, 1], c='k', marker='x',
+                zorder=5)
             # plt.scatter(self.positions[1, 0, 0], self.positions[1, 1, 0], c='r', marker='x')
         plt.xlim(0,self.L)
         plt.ylim(0,self.L)
         plt.savefig("posplot.png")
         print("posplot.png")
+    
+    def plot_energies(self):
+        t = np.arange(0, self.timesteps, self.dt)
+        plt.plot(t, self.E_potential)
+        plt.plot(t, self.E_kinetic)
+        plt.plot(t, self.E_total)
+        plt.savefig('Eplot.png')
+        print('Eplot.png')
+        
 
     def run_simulation(self):
         self.set_initial_conditions(random=False)
@@ -125,9 +166,10 @@ class Simulation:
             # print(vel0)
             # print(pos0.shape)
             self.Euler_step(ti, pos0, vel0)
+        # print(self.velocities[-1])
 
 
 
-sim = Simulation(n_particles=2, L=5, dt=0.001, timesteps=10000)
+sim = Simulation(n_particles=3, L=5, dt=0.0001, timesteps=30000)
 sim.run_simulation()
 sim.plot_positions()
