@@ -36,28 +36,38 @@ class Simulation:
         self.E_total = np.zeros(timesteps)
 
     def set_pseudorandom(self):
-        pos_available = (self.L // 1.5) ** 2
+        ''' 2D solution!! doesn't work in 3D...'''
+        pos_available_1d = (self.L // 1.5)
+        pos_available = int(pos_available_1d ** 2)
         if pos_available < self.n_particles:
             msg = f"Too many particles, default to {pos_available}"
             print("\033[91m {}\033[00m".format(msg))
-            n_particles = pos_available
+            self.n_particles = pos_available
+        rnd_pos = np.random.choice(pos_available, size=self.n_particles, replace=False)
+        # x = rnd_pos // pos_available_1d
+        # y = rnd_pos // pos_available_1d
+        # print(rnd_pos)
 
-        np.random.normal(0, 0.2, [self.n_particles, self.dims])
+        self.positions[0,:,:] = np.array([rnd_pos // pos_available_1d, rnd_pos % pos_available_1d]).transpose() * 1.5 + 1
+        # print(a)
+        self.positions += np.random.normal(0, 0.2, [self.n_particles, self.dims])
+        # np.random.normal(0, 0.2, [self.n_particles, self.dims])
 
     def set_initial_conditions(self, random=False):
         if self.n_particles > 3:
             random=True
         if random:
-            self.positions[0,:,:] = np.random.uniform(0, self.L, [self.n_particles, self.dims])
-            # self.velocities[0,:,:] = np.random.normal(0, 1, [self.n_particles, self.dims])
+            self.set_pseudorandom()
+            # self.positions[0,:,:] = np.random.uniform(0, self.L, [self.n_particles, self.dims])
+            self.velocities[0,:,:] = np.random.normal(0, 0.2, [self.n_particles, self.dims])
         else:
             self.positions[0,0,:] = [1, 1]
-            self.positions[0,1,:] = [1, 2.5]
+            self.positions[0,1,:] = [2, 2.5]
             if self.n_particles > 2:
-                self.positions[0, 2, :] = [1,4]
+                self.positions[0, 2, :] = [3,4]
             # self.velocities[0,0,:] = [0.2, 0]
             # self.velocities[0,1,:] = [-0.2, 0]
-            self.velocities[0,:,:] = np.random.normal(0, 0.5, [self.n_particles, self.dims])
+            # self.velocities[0,:,:] = np.random.normal(0, 0.2, [self.n_particles, self.dims])
 
     def U(self, r):
         U = 4*self.epsilon * ((self.sigma/r)**12 - (self.sigma/r)**6)
@@ -71,7 +81,7 @@ class Simulation:
     def get_U(self, xi, xj):
         dx = (xi - xj + self.L/2) % self.L - self.L/2
         r = np.sqrt(np.sum(dx * dx))
-        return U_(r)
+        return self.U_(r)
 
     def grad_U(self, r):
         return 4 * ((-12) * r**(-13) + 6 * r**(-7))
@@ -139,6 +149,9 @@ class Simulation:
         alphas = np.linspace(0.1, 1, self.timesteps)
         # print(alpha)
         for ni in range(self.n_particles):
+            # for i, pos in enumerate(self.positions):
+            #     plt.scatter(pos[ni, 0], pos[ni, 1], marker='.',
+            #         alpha=alphas[i])
             plt.scatter(self.positions[:, ni, 0], self.positions[:, ni, 1], marker='.',
                 alpha=alphas)
             # plt.scatter(self.positions[1, 0, :], self.positions[1, 1, :], c='r', marker='.')
@@ -160,16 +173,16 @@ class Simulation:
         
 
     def run_simulation(self):
-        self.set_initial_conditions(random=False)
+        self.set_initial_conditions(random=True)
         # print("init vel: ", self.velocities)
         for ti, (pos0, vel0) in enumerate(zip(self.positions[:-1], self.velocities[:-1])):
             # print(vel0)
             # print(pos0.shape)
             self.Euler_step(ti, pos0, vel0)
-        # print(self.velocities[-1])
+        # print(self.positions[0])
 
 
 
-sim = Simulation(n_particles=3, L=5, dt=0.0001, timesteps=30000)
+sim = Simulation(n_particles=6, L=5, dt=0.0001, timesteps=30000)
 sim.run_simulation()
 sim.plot_positions()
