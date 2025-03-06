@@ -35,14 +35,21 @@ class Simulation:
         self.E_kinetic = np.zeros(timesteps)
         self.E_total = np.zeros(timesteps)
 
+    def re_init(self):
+        self.positions = np.zeros([self.timesteps, self.n_particles, self.dims])
+        self.velocities = np.zeros([self.timesteps, self.n_particles, self.dims])
+        self.F_matrix =  np.zeros([self.n_particles, self.n_particles, self.dims])
+
     def set_pseudorandom(self):
         ''' 2D solution!! doesn't work in 3D...'''
         pos_available_1d = (self.L // 1.5)
         pos_available = int(pos_available_1d ** 2)
-        if pos_available < self.n_particles:
+        if self.n_particles > pos_available:
             msg = f"Too many particles, default to {pos_available}"
             print("\033[91m {}\033[00m".format(msg))
             self.n_particles = pos_available
+            self.re_init()
+
         rnd_pos = np.random.choice(pos_available, size=self.n_particles, replace=False)
         # x = rnd_pos // pos_available_1d
         # y = rnd_pos // pos_available_1d
@@ -133,11 +140,12 @@ class Simulation:
                     # print("f: ", F)
                     self.F_matrix[ni, nj] = F
                 # F_tot += F
-                # U_tot += get_U(pos0[ni], pos0[nj])
+                U_tot += self.get_U(pos0[ni], pos0[nj])
                     # F_matrix[ni, nj] = F_tot
             
             # print(self.F_matrix.shape)
         self.E_potential[ti] = U_tot
+        self.E_kinetic[ti] =  self.m * np.sum(vel0 * vel0)
         MAX = 1e3
         self.velocities[ti+1,: , :] = np.clip(vel0 + self.F_matrix.sum(axis=1) * self.dt / self.m, a_min=-MAX, a_max=MAX)
 
@@ -148,6 +156,7 @@ class Simulation:
     def plot_positions(self):
         alphas = np.linspace(0.1, 1, self.timesteps)
         # print(alpha)
+        plt.figure()
         for ni in range(self.n_particles):
             # for i, pos in enumerate(self.positions):
             #     plt.scatter(pos[ni, 0], pos[ni, 1], marker='.',
@@ -162,12 +171,20 @@ class Simulation:
         plt.ylim(0,self.L)
         plt.savefig("posplot.png")
         print("posplot.png")
+
+    # def save_arrays(self):
+    #     np.savetxt("positions.csv", self.positions)
+    #     np.savetxt("velocities.csv", self.velocities)
+    #     np.savetxt("E_kinetic.csv", self.E_kinetic)
+    #     np.savetxt("E_potential.csv", self.E_potential)
     
     def plot_energies(self):
-        t = np.arange(0, self.timesteps, self.dt)
-        plt.plot(t, self.E_potential)
-        plt.plot(t, self.E_kinetic)
-        plt.plot(t, self.E_total)
+        t = np.arange(0, self.timesteps*self.dt, self.dt)
+        plt.figure()
+        plt.plot(t, self.E_potential, label="Epot")
+        plt.plot(t, self.E_kinetic, label="Ekin")
+        plt.plot(t, self.E_total, label="Etot")
+        plt.legend()
         plt.savefig('Eplot.png')
         print('Eplot.png')
         
@@ -179,10 +196,13 @@ class Simulation:
             # print(vel0)
             # print(pos0.shape)
             self.Euler_step(ti, pos0, vel0)
+        self.E_total = self.E_kinetic + self.E_potential
         # print(self.positions[0])
 
 
 
-sim = Simulation(n_particles=6, L=5, dt=0.0001, timesteps=30000)
+sim = Simulation(n_particles=3, L=5, dt=0.0001, timesteps=50000)
 sim.run_simulation()
+# sim.save_arrays()
 sim.plot_positions()
+sim.plot_energies()
