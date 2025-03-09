@@ -13,16 +13,19 @@ class Simulation:
     EPSILON = 119.8 * k_B
     M = 39.948 * scipy.constants.u
 
-    def __init__(self, n_particles=3, L=5, dims=2, timesteps=1000, dt=0.001):
+    def __init__(self, n_particles=3, L=5, dims=2, timesteps=1000, dt=0.001, blocks=3, T=1):
         self.n_particles = n_particles
         self.L = L
         self.dims = dims
         self.timesteps = timesteps
         self.dt = dt
+        self.T = T
 
         self.m = 1
         self.sigma = 1
         self.epsilon = 1
+
+        self.blocks = blocks
 
         # self.m = self.M
         # self.sigma = self.SIGMA
@@ -62,21 +65,44 @@ class Simulation:
         self.positions += np.random.normal(0, 0.2, [self.n_particles, self.dims])
         # np.random.normal(0, 0.2, [self.n_particles, self.dims])
 
-    def set_initial_conditions(self, random=False):
+    def set_FCC(self):
+        unit_block = np.array([[0, 0, 0], [0, 0.5, 0.5], [0.5, 0, 0.5], [0.5, 0.5, 0]])
+        shift_lattice = []
+        for i in range(self.blocks):
+            for j in range(self.blocks):
+                for k in range(self.blocks):
+                    shift_lattice.append(np.tile([i, j, k], (4, 1)))
+        shift_lattice = np.vstack(shift_lattice)
+
+        lattice = (np.tile(unit_block, (self.blocks ** 3, 1)) + shift_lattice)
+
+        # print(lattice)
+        # print(lattice * self.L)
+
+        self.positions[0, :, :] = lattice * self.L / self.blocks
+
+    def set_initial_conditions(self, method='random'):
         if self.n_particles > 3:
             random=True
-        if random:
+        if method == 'fcc':
+            self.set_FCC()
+            self.velocities[0,:,:] = np.random.normal(0, np.sqrt(self.T), [self.n_particles, self.dims])
+        elif method == 'fixed':
+            self.positions[0,0,:] = [1, 1]
+            self.positions[0,1,:] = [1, 2.5]
+            if self.n_particles > 2:
+                self.positions[0, 2, :] = [3,4]
+            self.velocities[0,0,:] = [1, 0]
+            self.velocities[0,1,:] = [-1, 0]
+        elif method == 'pseudo':
             self.set_pseudorandom()
             # self.positions[0,:,:] = np.random.uniform(0, self.L, [self.n_particles, self.dims])
             self.velocities[0,:,:] = np.random.normal(0, 0.2, [self.n_particles, self.dims])
-        else:
-            self.positions[0,0,:] = [1, 1]
-            self.positions[0,1,:] = [2, 2.5]
-            if self.n_particles > 2:
-                self.positions[0, 2, :] = [3,4]
-            # self.velocities[0,0,:] = [0.2, 0]
-            # self.velocities[0,1,:] = [-0.2, 0]
             # self.velocities[0,:,:] = np.random.normal(0, 0.2, [self.n_particles, self.dims])
+        else:
+            self.positions[0,:,:] = np.random.uniform(0, self.L, [self.n_particles, self.dims])
+            self.velocities[0,:,:] = np.random.normal(0, 0.2, [self.n_particles, self.dims])
+
 
     def U(self, r):
         U = 4*self.epsilon * ((self.sigma/r)**12 - (self.sigma/r)**6)
@@ -175,14 +201,18 @@ class Simulation:
         if ti == 0:
             self.inner_loop(ti, pos0)
             self.F_vect_prev = self.F_matrix.sum(axis=1)
-        self.positions[ti+1, :, :] = (pos0 + vel0 * self.dt + self.dt ** 2 / (2 * self.m) * self.F_vect_prev) % self.L
+
+        newpos = (pos0 + vel0 * self.dt + self.dt ** 2 / (2 * self.m) * self.F_vect_prev) % self.L
+        # print("New position: ", newpos)
+        self.positions[ti+1, :, :] = newpos
         self.inner_loop(ti, self.positions[ti+1, :, :])
+
         F_tmp = self.F_matrix.sum(axis=1)
-        self.velocities[ti+1, :, :] = np.clip(vel0 + self.dt / (2 * self.m) * F_tmp + self.F_vect_prev, a_min=-MAX, a_max=MAX)
+        self.velocities[ti+1, :, :] = np.clip(vel0 + self.dt / (2 * self.m) * (F_tmp + self.F_vect_prev), a_min=-MAX, a_max=MAX)
         self.F_vect_prev = F_tmp
         self.E_kinetic[ti] =  0.5 * self.m * np.sum(vel0 * vel0)
 
-    def plot_positions(self):
+    def plot_positions_2d(self):
         alphas = np.linspace(0.1, 1, self.timesteps)
         # print(alpha)
         plt.figure()
@@ -201,11 +231,37 @@ class Simulation:
         plt.savefig("posplot.png")
         print("posplot.png")
 
-    # def save_arrays(self):
-    #     np.savetxt("positions.csv", self.positions)
-    #     np.savetxt("velocities.csv", self.velocities)
-    #     np.savetxt("E_kinetic.csv", self.E_kinetic)
-    #     np.savetxt("E_potential.csv", self.E_potential)
+    def plot_positions_3d(self):
+        alphas = np.linspace(0.1, 1, self.timesteps)
+        # print(alphas)
+
+        fig = plt.figure()
+        ax = plt.axes(projection ='3d')
+
+        STEPS = 100
+
+        for ni in range(self.n_particles):
+            # ax.scatter(pos[ni, 0], pos[ni, 1], pos[ni, 2], alpha=0.8)
+            ax.scatter(self.positions[-STEPS:, ni, 0], self.positions[-STEPS:, ni, 1], self.positions[-STEPS:, ni, 2],
+                        marker='.', alpha=0.2)
+            # ax.scatter(self.positions[0, ni, 0], self.positions[0, ni, 1], self.positions[0, ni, 2],
+            #             marker='x', alpha=0.8, c='k')
+        # ax.scatter(self.p)
+
+        ax.set_xlim(0, self.L)
+        ax.set_ylim(0, self.L)
+        ax.set_zlim(0, self.L)
+
+        plt.savefig('3dplot.png')
+        print('3dplot.png')
+
+    def plot_positions(self):
+        if self.dims == 2:
+            self.plot_positions_2d()
+        elif self.dims == 3:
+            self.plot_positions_3d()
+        else:
+            print("error what are you doing? (dims != 2 or 3)")
     
     def plot_energies(self):
         t = np.arange(0, self.timesteps*self.dt, self.dt)
@@ -217,22 +273,37 @@ class Simulation:
         plt.savefig('Eplot.png')
         print('Eplot.png')
         
+    def save_sim(self):
+        np.savez("pos.npz", array=self.positions)
+    
+    def load_positions(self):
+        data = np.load("pos.npz")
+        for item in data.files:
+            self.positions = data[item]
 
     def run_simulation(self):
-        self.set_initial_conditions(random=True)
+        self.set_initial_conditions(method='fcc')
         # print("init vel: ", self.velocities)
+        # print("init pos: ", self.positions[0, :, :])
         for ti, (pos0, vel0) in enumerate(zip(self.positions[:-1], self.velocities[:-1])):
             # print(vel0)
             # print(pos0.shape)
-            self.Euler_step(ti, pos0, vel0)
-            # self.Verlet_step(ti, pos0, vel0)
+            # self.Euler_step(ti, pos0, vel0)
+            self.Verlet_step(ti, pos0, vel0)
+            if (ti) % 100 == 0:
+                print(f"{ti} steps")
         self.E_total = self.E_kinetic + self.E_potential
         # print(self.positions[0])
 
 
 
-sim = Simulation(n_particles=8, L=5, dt=0.0001, timesteps=30000)
+sim = Simulation(n_particles=32, L=3, dt=0.001, timesteps=1000, dims=3, blocks=2, T=100)
+# sim.set_FCC()
+# sim.plot_positions_3d()
+
 sim.run_simulation()
-# sim.save_arrays()
+sim.save_sim()
+# sim.load_positions()
+
 sim.plot_positions()
 sim.plot_energies()
