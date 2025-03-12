@@ -1,12 +1,19 @@
+'''
+Simulation 
+
+
+Created as part of the Computational Physics course at Leiden University
+Authors: Bryce Benz, Liya Charlaganova
+'''
+
 import numpy as np
 import matplotlib.pyplot as plt
 import scipy
 import scipy.constants
-from scipy.stats import qmc
 
-
-# print("yea")
 class Simulation:
+    # TODO: are these constants necesary?
+
     k_B = scipy.constants.k
     A = 1e-10
     SIGMA = 3.405 * A
@@ -15,19 +22,22 @@ class Simulation:
     M = 39.948 * scipy.constants.u
 
     def __init__(self, rho=1, T=100,
-                 n_particles=108, L=0, dims=3, timesteps=1000, dt=0.001, blocks=3):
+                 n_particles=108, L=0, dims=3, timesteps=1000, dt=0.001, blocks=3,
+                 state=None):
         # self.m = self.M
         # self.sigma = self.SIGMA
         # self.epsilon = self.EPSILON
 
-        self.n_particles = n_particles
-        # self.L = L
+
         self.dims = dims
         self.timesteps = timesteps
         self.dt = dt
         self.T = T
         self.rho = rho
+        self.state = state
+        self.blocks = blocks
 
+        self.r_range = 100      # change name
         self.m = 1
         # self.sigma = 1
         # self.epsilon = 1
@@ -35,12 +45,16 @@ class Simulation:
         # self.kBT = T / self.EPSILON
         self.kBT = T
 
-        if not L:
-            self.L = (self.n_particles * self.m / self.rho) ** (1/3) 
+        if blocks:
+            self.n_particles = self.dims ** 3 * 4
         else:
-            self.L = L
+            self.n_particles = n_particles
 
-        self.blocks = blocks
+        if L:
+            self.L = L
+        else:
+            self.L = (self.n_particles * self.m / self.rho) ** (1/3) 
+
 
         self.positions = np.zeros([timesteps, n_particles, dims])
         self.velocities = np.zeros([timesteps, n_particles, dims])
@@ -49,7 +63,11 @@ class Simulation:
         self.E_potential = np.zeros(timesteps)
         self.E_kinetic = np.zeros(timesteps)
         self.E_total = np.zeros(timesteps)
-        self.pair_hist = np.zeros([timesteps, 50])
+        self.pair_hist = np.zeros([timesteps, self.r_range])
+        self.pressures = np.zeros(timesteps)
+
+        # then if n_particles, do random (2d and 3d)
+        
 
     def re_init(self):      # TODO: remove later?
         self.positions = np.zeros([self.timesteps, self.n_particles, self.dims])
@@ -92,16 +110,13 @@ class Simulation:
         self.velocities[0, :, :] = np.random.normal(0, np.sqrt(self.kBT), [self.n_particles, self.dims])
 
     def set_initial_conditions(self, method='random'):
-        if self.n_particles > 3:
-            random=True
-        if method == 'fcc':
+        if self.blocks:
             self.set_initial_positions_FCC()
             self.set_initial_velocities()
-        elif method == 'fixed':
+
+        elif self.n_particles == 2:
             self.positions[0,0,:] = [1, 1]
             self.positions[0,1,:] = [1, 2.5]
-            if self.n_particles > 2:
-                self.positions[0, 2, :] = [3,4]
             self.velocities[0,0,:] = [1, 0]
             self.velocities[0,1,:] = [-1, 0]
         elif method == 'pseudo':
@@ -192,10 +207,12 @@ class Simulation:
         dx = self.dx_matrix(pos0)
         r = np.sqrt(np.sum(dx * dx, axis=2))
 
-        U = np.nan_to_num(4 * (r ** (-12) - r ** (-6)), nan=0)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            U = np.nan_to_num(4 * (r ** (-12) - r ** (-6)), nan=0)
         self.E_potential[ti] = np.sum(U) / 2
 
-        grad_U = np.nan_to_num((4 * ( -12 * r**(-13) + 6 * r ** (-7))), nan=0)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            grad_U = np.nan_to_num((4 * ( -12 * r**(-13) + 6 * r ** (-7))), nan=0)
         self.F_matrix = -1 * dx * np.repeat(grad_U[:, :, np.newaxis], repeats=self.dims, axis=2)
         # print(dx)
 
@@ -217,18 +234,18 @@ class Simulation:
     #             # F_tot += F
     #     self.E_potential[ti] = 0.5 * U_tot
 
-    def Pressure(self, pos0):
+    def Pressure(self, ti, pos0):
         dx = self.dx_matrix(pos0)
         r = np.sqrt(np.sum(dx * dx, axis=2))
-
-        a = np.nan_to_num(((-12) * r**(-12) + 6 * r**(-6)), nan=0) # betwen brackets part
-        return self.rho * (self.kBT  - 1/ (3 * self.n_particles)) * np.sum(a)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            a = np.nan_to_num(((-12) * r**(-12) + 6 * r**(-6)), nan=0) # betwen brackets part
+        self.pressures[ti] = self.rho * (self.kBT  - 1 / (3 * self.n_particles) * np.sum(a))
 
     def pair_correlation(self, ti, pos0):
         dx = self.dx_matrix(pos0)
         r = np.sqrt(np.sum(dx * dx, axis=2))
 
-        hist, _ = np.histogram(r[np.tril_indices_from(r)], bins=50, range=[0, self.L])
+        hist, _ = np.histogram(r[np.tril_indices_from(r)], bins=self.r_range, range=[0.1, self.L])
         self.pair_hist[ti] = hist
 
     def Euler_step(self, ti, pos0, vel0): # TODO update new Force
@@ -256,6 +273,7 @@ class Simulation:
         self.F_vect_prev = F_tmp
         self.E_kinetic[ti] = self.measure_E_kinetic(vel0)
         self.pair_correlation(ti, pos0)
+        self.Pressure(ti, pos0)
         # 0.5 * self.m * np.sum(vel0 * vel0)
 
     def plot_positions_2d(self):
@@ -289,9 +307,9 @@ class Simulation:
         for ni in range(self.n_particles):
             # ax.scatter(pos[ni, 0], pos[ni, 1], pos[ni, 2], alpha=0.8)
             ax.scatter(self.positions[-STEPS:, ni, 0], self.positions[-STEPS:, ni, 1], self.positions[-STEPS:, ni, 2],
-                        marker='.', alpha=0.2)
-            # ax.scatter(self.positions[0, ni, 0], self.positions[0, ni, 1], self.positions[0, ni, 2],
-            #             marker='x', alpha=0.8, c='k')
+                        marker='.', alpha=0.2, s=3)
+            ax.scatter(self.positions[0, ni, 0], self.positions[0, ni, 1], self.positions[0, ni, 2],
+                        marker='.', alpha=0.8, c='k')
         # ax.scatter(self.p)
 
         ax.set_xlim(0, self.L)
@@ -325,20 +343,27 @@ class Simulation:
         plt.legend()
 
         plt.title(r"$\rho$" + f" = {self.rho}, T = {self.T}, dt = {self.dt}, steps = {self.timesteps}")
+
         plt.savefig('Eplot.png')
 
         print('Eplot.png')
 
-    def plot_pair_correlation(self):
+    def plot_pair_correlation(self, ax=None):
+        r = np.linspace(0.1, self.L, self.r_range)
+
         avg = np.average(self.pair_hist, axis=0)
-        x = np.linspace(0, self.L, 50)
+        g = avg * 2 * self.L ** self.dims / (self.n_particles * (self.n_particles - 1) * 4 * np.pi * r * self.L / self.r_range)
+        # r = np.linspace(0, self.L, self.r_range)
 
-        plt.figure()
-        plt.plot(x, avg)
-        plt.title(r"$\rho$" + f" = {self.rho}, T = {self.T}, dt = {self.dt}, steps = {self.timesteps}")
+        if ax:
+            ax.plot(r, g, label=self.state)
+        else:
+            plt.figure()
+            plt.plot(r, g)
+            plt.title(r"$\rho$" + f" = {self.rho}, T = {self.T}, dt = {self.dt}, steps = {self.timesteps}")
 
-        plt.savefig("pair_correlation.png")
-        print("pair_correlation.png")
+            plt.savefig("pair_correlation.png")
+            print("pair_correlation.png")
 
     def save_sim(self):
         np.savez("pos.npz", array=self.positions)
@@ -349,39 +374,65 @@ class Simulation:
             self.positions = data[item]
 
     def run_simulation(self):
+        if self.state:
+            print(f"Running {self.state}...")
+
         self.set_initial_conditions(method='fcc')
 
         # print("init vel: ", self.velocities)
         # print("init pos: ", self.positions[0, :, :])
+        
         for ti, (pos0, vel0) in enumerate(zip(self.positions[:-1], self.velocities[:-1])):
             # print(vel0)
             # print(pos0.shape)
             # self.Euler_step(ti, pos0, vel0)
             self.Verlet_step(ti, pos0, vel0)
-            if (ti) % 100 == 0:
-                print(f"{ti} steps")
+            if (ti) % 10 == 0:
+                # print(f"{ti} steps")
+                print(f"\rProgress: {(100 * ti / (self.timesteps-10)):.0f}%", end="")
+        print()
         self.E_total = self.E_kinetic + self.E_potential
-        P = self.Pressure(self.positions[-1])
+        P = np.average(self.pressures)
         print("Pressure: ", P)
 
         # print(self.positions[0])
         # print(self.E_kinetic)
 
-# class SimulationBatch()
+class SimulationBatch:
+    def __init__(self, dt=0.001, timesteps=1000):
+        self.sim_gas = Simulation(rho=0.3, T=3, dt=dt, timesteps=timesteps, state='gas')
+        self.sim_liquid = Simulation(rho=0.8, T=1, dt=dt, timesteps=timesteps, state='liquid')
+        self.sim_solid = Simulation(rho=1.2, T=0.5, dt=dt, timesteps=timesteps, state='solid')
 
+    def run_all(self):
+        self.sim_gas.run_simulation()
+        self.sim_liquid.run_simulation()
+        self.sim_solid.run_simulation()
+
+    def plot_all(self):
+        fig, ax = plt.subplots(1, 1)
+        self.sim_gas.plot_pair_correlation(ax)
+        self.sim_liquid.plot_pair_correlation(ax)
+        self.sim_solid.plot_pair_correlation(ax)
+        ax.legend()
+        plt.savefig("pair_correlation.png")
 
 # sim = Simulation(n_particles=3, L=1, dt=0.001, timesteps=1000, dims=2, blocks=2, T=1)
-# sim = Simulation(n_particles=108, dt=0.001, timesteps=1000, dims=3, blocks=3, rho=1.2, T=0.5)
+sim = Simulation(n_particles=108, dt=0.001, timesteps=1000, dims=3, blocks=3, rho=1.2, T=0.5)
 # sim = Simulation(rho=0.5, T=3, dt=0.001, timesteps=1000)
-sim = Simulation(rho=0.8, T=1, dt=0.001, timesteps=1000)
+# sim = Simulation(rho=0.8, T=1, dt=0.001, timesteps=1000)
 
 # sim.set_initial_positions_FCC()
 # sim.plot_positions_3d()
 
 sim.run_simulation()
-sim.save_sim()
+# sim.save_sim()
 # sim.load_positions()
 
 sim.plot_positions()
 sim.plot_energies()
-sim.plot_pair_correlation()
+# sim.plot_pair_correlation()
+
+# batch = SimulationBatch()
+# batch.run_all()
+# batch.plot_all()
