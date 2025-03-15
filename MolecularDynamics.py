@@ -1,15 +1,27 @@
 '''
 Simulation 
 
-
 Created as part of the Computational Physics course at Leiden University
 Authors: Bryce Benz, Liya Charlaganova
+'''
+
+'''
+TODO:
+- fix axes
+- allow option for custom rho, T values in SimulationBatch()
+- add some run summary file?
+- do the os thing that stores the latest simulation?
+
+- remove unnecessary shit
+- add docstrings, comments
+- add method choice (default VERLET)
 '''
 
 import numpy as np
 import matplotlib.pyplot as plt
 import scipy
 import scipy.constants
+import time
 
 class Simulation:
     # TODO: are these constants necesary?
@@ -43,10 +55,10 @@ class Simulation:
         # self.epsilon = 1
 
         # self.kBT = T / self.EPSILON
-        self.kBT = T
+        self.kBT = T    # fix to just T, kbT never needed ... 
 
         if blocks:
-            self.n_particles = self.dims ** 3 * 4
+            self.n_particles = self.blocks ** self.dims * 4
         else:
             self.n_particles = n_particles
 
@@ -64,18 +76,19 @@ class Simulation:
         self.energies_kin = np.zeros(timesteps)
         self.energies_tot = np.zeros(timesteps)
         self.distance_hist = np.zeros([timesteps, self.r_range])
-        self.pair_correlation = np.zeros(self.r_range)
+        self.pair_correlation_g = np.zeros(self.r_range)
         self.pressures = np.zeros(timesteps)
-        self.pressure = 0
+        self.final_pressure = 0
         self.ti_initial = 0
-        self.dx = np.zeros([n_particles, n_particles])
+        self.current_dx = np.zeros([n_particles, n_particles])
+        self.current_r = np.zeros([n_particles, n_particles])
 
     def cleanup(self):
         self.forces = []
         self.force_prev = []
         self.distance_hist =[]
         self.pressures = []
-        self.dx = []
+        self.current_dx = []
 
 
     def set_initial_positions_FCC(self):
@@ -105,12 +118,14 @@ class Simulation:
             self.positions[0,:,:] = np.random.uniform(0, self.L, [self.n_particles, self.dims])
             self.velocities[0,:,:] = np.random.normal(0, 0.2, [self.n_particles, self.dims])
 
-    def measure_gradU(self, r):
+    def measure_gradU(self):
+        r = self.current_r
         with np.errstate(divide='ignore', invalid='ignore'):
             grad_U = np.nan_to_num((4 * ( -12 * r**(-13) + 6 * r ** (-7))), nan=0)
         return grad_U
     
-    def measure_Epot(self, r):
+    def measure_Epot(self):
+        r = self.current_r
         with np.errstate(divide='ignore', invalid='ignore'):
             U = np.nan_to_num(4 * (r ** (-12) - r ** (-6)), nan=0)
         return np.sum(U) / 2
@@ -121,10 +136,10 @@ class Simulation:
     def relaxation_loop(self, ti, relax_steps):
         # relax_steps = 50
         if ti == 0:
-            relax_steps = 100
+            relax_steps = 200
 
         for i, (pos, vel) in enumerate(zip(self.positions[ti:ti+relax_steps], self.velocities[ti:ti+relax_steps])):
-            self.Verlet_step(ti + i, pos, vel)
+            self.Verlet_step(ti+i, pos, vel)
         return ti + relax_steps
     
     def relaxation_scale(self, vel):
@@ -134,7 +149,7 @@ class Simulation:
         scale = self.relaxation_scale(self.velocities[ti])
         self.velocities[ti] =  self.velocities[ti] * scale
 
-    def velocity_relaxation(self): # TODO does not converge
+    def velocity_relaxation(self):
         Ekin_target = (self.n_particles - 1) * (3 / 2) * self.kBT
         relax_steps = 50
         E_err = Ekin_target * 0.01
@@ -160,45 +175,58 @@ class Simulation:
     #     r = np.sqrt(np.sum(dx * dx, axis=2))
     #     return r
 
-    def dx_matrix(self, pos0):
+    def set_current_dx(self, pos0):
         x1 = np.repeat([pos0], repeats=self.n_particles, axis=0)
         x2 = np.transpose(x1, axes=[1,0,2])
 
-        return (x2 - x1 + self.L/2) % self.L - self.L/2
+        self.current_dx = (x2 - x1 + self.L/2) % self.L - self.L/2
+    
+    def set_current_r(self):
+        dx = self.current_dx
+        self.current_r = np.sqrt(np.sum(dx * dx, axis=2))
 
-    def measure_forces(self, ti):
-        # dx = self.dx_matrix(pos0)
-        dx = self.dx
-        r = np.sqrt(np.sum(dx * dx, axis=2))
+    def measure_current_forces(self):
+        # dx = self.current_set_current_dx(pos0)
+        dx = self.current_dx
+        # r = self.current_r
+        # r = np.sqrt(np.sum(dx * dx, axis=2))
         # self.energies_pot[ti] = self.measure_Epot(r)
-        grad_U = self.measure_gradU(r)
+        grad_U = self.measure_gradU()
         self.forces = -1 * dx * np.repeat(grad_U[:, :, np.newaxis], repeats=self.dims, axis=2)
 
 
-    def measure_pressure(self, ti):
-        # dx = self.dx_matrix(pos0)
-        dx = self.dx
-        r = np.sqrt(np.sum(dx * dx, axis=2))
+    def measure_pressure(self):
+        # dx = self.current_set_current_dx(pos0)
+        # dx = self.current_dx
+        r = self.current_r
+        # r = np.sqrt(np.sum(dx * dx, axis=2))
         with np.errstate(divide='ignore', invalid='ignore'):
             a = np.nan_to_num(((-12) * r**(-12) + 6 * r**(-6)), nan=0) # betwen brackets part
         # print("for test: ", np.sum(a))
-        self.pressures[ti] = self.rho * (self.kBT  - np.sum(a) / (3 * self.n_particles))
+        # self.pressures[ti] = self.rho * (self.kBT  - np.sum(a) / (3 * self.n_particles))
+        return self.rho * (self.kBT  - np.sum(a) / (3 * self.n_particles))
 
     def measure_correlation(self, ti):
-        # dx = self.dx_matrix(pos0)
-        dx = self.dx
-        r = np.sqrt(np.sum(dx * dx, axis=2))
+        # dx = self.current_set_current_dx(pos0)
+        # dx = self.current_dx
+        r = self.current_r
+        # r = np.sqrt(np.sum(dx * dx, axis=2))
 
         hist, _ = np.histogram(r[np.tril_indices_from(r)], bins=self.r_range, range=[0.1, self.L])
         self.distance_hist[ti] = hist
+        # return hist
 
     def Euler_step(self, ti, pos0, vel0): # TODO update new Force
         MAX = 1e3
-        self.dx = self.dx_matrix(pos0)
-        r = np.sqrt(np.sum(dx * dx, axis=2))    # inefficient
-        self.measure_Ekin(vel0)
-        self.measure_Epot(r)
-        self.measure_forces(ti, pos0)
+        self.set_current_dx(pos0)
+        self.set_current_r()
+
+        self.energies_kin[ti] = self.measure_Ekin(vel0)
+        self.energies_pot[ti] = self.measure_Epot()
+        self.pressures[ti] = self.measure_pressure()
+        self.measure_correlation(ti)
+
+        self.measure_current_forces()
 
         self.positions[ti+1, :, :] = (pos0 + vel0 * self.dt) % self.L
         self.velocities[ti+1,: , :] = np.clip(vel0 + self.forces.sum(axis=1) * self.dt / self.m, a_min=-MAX, a_max=MAX)
@@ -207,35 +235,40 @@ class Simulation:
     def Verlet_step(self, ti, pos0, vel0):
         MAX = 1e3
 
-        self.energies_kin[ti] = self.measure_Ekin(vel0)
-        self.measure_Epot(r)
-
         if ti == 0:
-            self.dx = self.dx_matrix(pos0)
-            self.measure_forces(ti)
+            self.set_current_dx(pos0)
+            self.set_current_r()
+            # self.current_dx = self.current_set_current_dx(pos0)
+            self.measure_current_forces()
             self.force_prev = self.forces.sum(axis=1)
+
+        self.energies_kin[ti] = self.measure_Ekin(vel0)
+        self.energies_pot[ti] = self.measure_Epot()
+        self.pressures[ti] = self.measure_pressure()
         self.measure_correlation(ti)
-        self.measure_pressure(ti)
+
         newpos = (pos0 + vel0 * self.dt + self.dt ** 2 / (2 * self.m) * self.force_prev) % self.L
         # print("New position: ", newpos)
-        self.dx = self.dx_matrix(newpos)
+        self.set_current_dx(newpos)
+        self.set_current_r()
+        # self.current_dx = self.current_set_current_dx(newpos)
         self.positions[ti+1, :, :] = newpos
 
-        self.measure_forces(ti+1)
+        self.measure_current_forces()
 
         F_tmp = self.forces.sum(axis=1)
         self.velocities[ti+1, :, :] = np.clip(vel0 + self.dt / (2 * self.m) * (F_tmp + self.force_prev), a_min=-MAX, a_max=MAX)
         self.force_prev = F_tmp
         
 
-        # 0.5 * self.m * np.sum(vel0 * vel0)
-
     def calculate_pair_corr(self):
-        r = np.linspace(0.1, self.L, self.r_range)
+        r = np.linspace(0.01, self.L, self.r_range)
         avg = np.average(self.distance_hist[self.ti_initial:], axis=0)
-        
-        g =  avg * 2 * self.L ** self.dims / (self.n_particles * (self.n_particles - 1) * 4 * np.pi * r * self.L / self.r_range)
-        self.pair_correlation = g
+        V = self.L ** self.dims
+        dr = self.L / self.r_range
+
+        g =  avg * 2 * V / (self.n_particles * (self.n_particles - 1) * 4 * np.pi * r ** 2 * dr)
+        self.pair_correlation_g = g
         # print('here g', g)
 
     def plot_positions_2d(self):
@@ -317,15 +350,17 @@ class Simulation:
             print('Eplot.png')
 
     def plot_pair_correlation(self, ax=None):
-        r = np.linspace(0.1, self.L, self.r_range)
+        r = np.linspace(0.01, self.L, self.r_range)
         # r = np.linspace(0, self.L, self.r_range)
 
         if ax:
-            ax.plot(r, self.pair_correlation, label=self.state)
+            ax.plot(r, self.pair_correlation_g, label=self.state)
+            # ax.set_xlim(0.01, self.L/2)
         else:
             plt.figure()
-            plt.plot(r, self.pair_correlation)
+            plt.plot(r, self.pair_correlation_g)
             plt.title(r"$\rho$" + f" = {self.rho}, T = {self.T}, dt = {self.dt}, steps = {self.timesteps}")
+            # plt.xlim(0.01, self.L/2)
 
             plt.savefig("pair_correlation.png")
             print("pair_correlation.png")
@@ -338,16 +373,15 @@ class Simulation:
         for item in data.files:
             self.positions = data[item]
 
-    def run_simulation(self):
+    def run_simulation(self, print_progress=True):
         # if self.state:
             # print(f"Running {self.state}...")
 
         self.set_initial_conditions()
         # ti_initial=0
-        self.velocity_relaxation()
 
-        # print("init vel: ", self.velocities)
-        # print("init pos: ", self.positions[0, :, :])
+        start = time.perf_counter()
+        self.velocity_relaxation()
 
         for i, (pos0, vel0) in enumerate(zip(self.positions[self.ti_initial:-1], self.velocities[self.ti_initial:-1])):
             ti = self.ti_initial + i
@@ -355,12 +389,16 @@ class Simulation:
             # print(pos0.shape)
             # self.Euler_step(ti, pos0, vel0)
             self.Verlet_step(ti, pos0, vel0)
-            if (ti) % 100 == 0:
-                # print(f"{ti} steps")
-                print(f"\rProgress: {(100 * ti / (self.timesteps-10)):.0f}%", end="")
-        print()
+            if print_progress:
+                if (ti) % 100 == 0:
+                    # print(f"{ti} steps")
+                    print(f"\rProgress: {(100 * ti / (self.timesteps-100)):.0f}%", end="")
+        end = time.perf_counter()
+        if print_progress:
+            print("", end="\r")
+            print(f"Speed: {(self.timesteps / (end-start)):.0f} steps / second")
         self.energies_tot = self.energies_kin + self.energies_pot
-        self.pressure = np.average(self.pressures[self.ti_initial:])
+        self.final_pressure = np.average(self.pressures[self.ti_initial:])
         self.calculate_pair_corr()
         self.cleanup()
         # print("measure_pressure: ", self.pressure)
@@ -392,8 +430,8 @@ class SimulationBatch:
         for i in range(self.repeats):
             sim = Simulation(rho=rho, T=T, dt=self.dt, timesteps=self.timesteps, state=state)
             sim.run_simulation()
-            pressures[i] = sim.pressure
-            pair_correlations.append(sim.g)
+            pressures[i] = sim.final_pressure
+            pair_correlations.append(sim.pair_correlation_g)
 
         # store last simulation
         sim.g = np.mean(np.array(pair_correlations), axis=0)
@@ -418,13 +456,10 @@ class SimulationBatch:
     #     self.sim_solid.run_simulation()
         
     def plot_correlation(self):
-        fig, ax = plt.subplots(1, 1)
+        plt.figure()
+        ax = plt.gca()
         for i, sim in enumerate(self.saved_sims):
-            # ax = fig.add_subplot(1, n_sims, i+1,  projection='3d')
             sim.plot_pair_correlation(ax)
-        # self.sim_gas.plot_pair_correlation(ax)
-        # self.sim_liquid.plot_pair_correlation(ax)
-        # self.sim_solid.plot_pair_correlation(ax)
         ax.legend()
         plt.savefig("all_corrs.png")
         print("all_corrs.png")
@@ -433,17 +468,11 @@ class SimulationBatch:
         n_sims = len(self.saved_sims)
 
         fig = plt.figure(figsize=[5*n_sims, 5])
-        # fig, axs = plt.subplots(1, 3, projection ='3d')
+
         for i, sim in enumerate(self.saved_sims):
             ax = fig.add_subplot(1, n_sims, i+1,  projection='3d')
             sim.plot_positions_3d(ax)
-        # ax1 = fig.add_subplot(131, projection='3d')
-        # ax2 = fig.add_subplot(132, projection='3d')
-        # ax3 = fig.add_subplot(133, projection='3d')
-        # self.sim_gas.plot_positions_3d(ax1)
-        # self.sim_liquid.plot_positions_3d(ax2)
-        # self.sim_solid.plot_positions_3d(ax3)
-        plt.title(f"dt = {self.dt}, steps = {self.timesteps}")
+        plt.suptitle(f"dt = {self.dt}, steps = {self.timesteps}")
         plt.savefig("allpos.png")
         print("allpos.png")
     
@@ -469,7 +498,7 @@ class SimulationBatch:
 
 # sim = Simulation(n_particles=3, L=1, dt=0.001, timesteps=1000, dims=2, blocks=2, T=1)
 # sim = Simulation(n_particles=108, dt=0.001, timesteps=1000, dims=3, blocks=3, rho=1.2, T=0.5)
-sim = Simulation(rho=0.5, T=3, dt=0.001, timesteps=1000)
+# sim = Simulation(rho=0.5, T=3, dt=0.001, timesteps=1000)
 # sim = Simulation(rho=0.8, T=1, dt=0.001, timesteps=1000)
 # sim = Simulation(rho=1.2, T=0.1, dt=0.001, timesteps=1000)
 
@@ -484,5 +513,5 @@ sim = Simulation(rho=0.5, T=3, dt=0.001, timesteps=1000)
 # sim.plot_energies()
 # sim.plot_pair_correlation()
 
-batch = SimulationBatch(repeats=1, dt=0.001, timesteps=1000)
+batch = SimulationBatch(repeats=1, dt=0.001, timesteps=2000, opt='gls', plot=True)
 batch.run_simulations()
