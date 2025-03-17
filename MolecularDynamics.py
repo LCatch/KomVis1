@@ -59,10 +59,10 @@ class Simulation:
         # self.kBT = T / self.EPSILON
         self.kBT = T    # fix to just T, kbT never needed ... 
 
-        if self.blocks:
-            self.n_particles = self.blocks ** self.dims * 4
-        else:
+        if n_particles:
             self.n_particles = n_particles
+        else:
+            self.n_particles = self.blocks ** self.dims * 4
 
         if L:
             self.L = L
@@ -113,21 +113,39 @@ class Simulation:
         lattice = (np.tile(unit_block, (self.blocks ** 3, 1)) + shift_lattice)
         self.positions[0, :, :] = lattice * self.L / self.blocks
 
+    def set_initial_2Dgrid(self):
+        ''' 2D solution!! doesn't work in 3D...'''
+        pos_available_1d = (self.L // 1.5)
+        pos_available = int(pos_available_1d ** 2)
+        if self.n_particles > pos_available:
+            msg = f"Too many particles, default to {pos_available}"
+            print("\033[91m {}\033[00m".format(msg))
+            self.n_particles = pos_available
+            self.re_init()
+
+        rnd_pos = np.random.choice(pos_available, size=self.n_particles, replace=False)
+        self.positions[0,:,:] = np.array([rnd_pos // pos_available_1d, rnd_pos % pos_available_1d]).transpose() * 1.5 + 1
+        self.positions += np.random.normal(0, 0.2, [self.n_particles, self.dims])
+
+
     def set_initial_velocities(self):
         self.velocities[0, :, :] = np.random.normal(0, np.sqrt(self.kBT), [self.n_particles, self.dims])
 
     def set_initial_conditions(self):
-        if self.blocks:
+        if self.blocks and self.dims == 3:
             self.set_initial_positions_FCC()
-            self.set_initial_velocities()
-        elif self.n_particles == 2:
-            self.positions[0,0,:] = [1, 1]
-            self.positions[0,1,:] = [1, 2.5]
-            self.velocities[0,0,:] = [1, 0]
-            self.velocities[0,1,:] = [-1, 0]
+            
+        # elif self.n_particles == 2:
+        #     self.positions[0,0,:] = [1, 1]
+        #     self.positions[0,1,:] = [1, 2.5]
+        #     self.velocities[0,0,:] = [1, 0]
+        #     self.velocities[0,1,:] = [-1, 0]
+        elif self.dims == 2:
+            self.set_initial_2Dgrid()
         else:
             self.positions[0,:,:] = np.random.uniform(0, self.L, [self.n_particles, self.dims])
-            self.velocities[0,:,:] = np.random.normal(0, 0.2, [self.n_particles, self.dims])
+            # self.velocities[0,:,:] = np.random.normal(0, 0.2, [self.n_particles, self.dims])
+        self.set_initial_velocities()
 
     def measure_gradU(self):
         r = self.current_r
@@ -289,10 +307,9 @@ class Simulation:
     def plot_positions_2d(self):
         plt.figure()
         for ni in range(self.n_particles):
-            plt.scatter(self.positions[:, ni, 0], self.positions[:, ni, 1], marker='.',
-                        alpha=1)
+            plt.scatter(self.positions[:, ni, 0], self.positions[:, ni, 1], marker='.', s=2)
             # plt.scatter(self.positions[1, 0, :], self.positions[1, 1, :], c='r', marker='.')
-            plt.scatter(self.positions[0, ni, 0], self.positions[0, ni, 1], c='k', marker='x',
+            plt.scatter(self.positions[0, ni, 0], self.positions[0, ni, 1], c='k',
                 zorder=5)
             # plt.scatter(self.positions[1, 0, 0], self.positions[1, 1, 0], c='r', marker='x')
         plt.xlim(0,self.L)
@@ -576,7 +593,8 @@ class SimulationBatch:
 # sim = Simulation(n_particles=108, dt=0.001, timesteps=1000, dims=3, blocks=3, rho=1.2, T=0.5)
 # sim = Simulation(rho=0.5, T=3, dt=0.001, timesteps=1000)
 # sim = Simulation(rho=0.8, T=1, dt=0.001, timesteps=1000)
-sim = Simulation(rho=0.45, T=0.35, dt=0.0005, timesteps=3000)
+sim = Simulation(T=0.35, dt=0.001, timesteps=1000, dims=2,
+                 n_particles=30, L=10)
 
 
 sim.run_simulation()
@@ -586,8 +604,8 @@ sim.run_simulation()
 print(sim.final_pressure)
 
 sim.plot_positions()
-sim.plot_energies()
-sim.plot_pair_correlation()
+# sim.plot_energies()
+# sim.plot_pair_correlation()
 
 
 params = []
