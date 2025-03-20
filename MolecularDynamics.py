@@ -15,6 +15,10 @@ This code will simulate the evolution of a system of particles
 which interact through the Lennard-Jones potential. The whole
 simulation uses natural units and does not assume any specific
 element, though its goal is to simulate Argon.
+
+Plots are stored in folder 'plots', if script is not allowed to make
+directories, please set output_dir='' in all SimulationBatch() instances.
+This will create the plots in the current directory, and hopefully is allowed.
 '''
 
 import numpy as np
@@ -80,6 +84,8 @@ class Simulation:
         if output_dir:
             self.output_dir = output_dir
             os.makedirs(output_dir, exist_ok=True)
+        else:
+            self.output_dir = '.'
 
         self.validate_init()
 
@@ -583,7 +589,10 @@ class SimulationBatch:
         self.params = params
         self.method = method
         self.summary_file = f"{summary_file}.txt"
-        self.output_dir = output_dir
+        if output_dir:
+            self.output_dir = output_dir
+        else:
+            self.output_dir = '.'
 
         self.write_summary()
 
@@ -807,7 +816,7 @@ def custom():
 
     ''' Triple point simulation '''
     batch = SimulationBatch(repeats=1, dt=0.01, timesteps=2500, states='', plot=True,
-                            method='Verlet', params=[[0.16, 0.8]])
+                            method='Verlet', params=[[0.16, 0.8]], output_dir='')
     batch.simulate()
 
     ''' Phase space plot for Argon 
