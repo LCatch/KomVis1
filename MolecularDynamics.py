@@ -435,7 +435,7 @@ class Simulation:
         ax.set_ylabel('Position y [n.u.]')
 
         if save:
-            plt.savefig(f'{self.output_dir}/Positions.png')
+            plt.savefig(f'{self.output_dir}/Positions.pdf')
 
     def plot_positions_3d(self, ax=None):
         '''
@@ -472,7 +472,7 @@ class Simulation:
         ax.set_zlabel('Position z [n.u.]')
 
         if save:
-            plt.savefig(f'{self.output_dir}/Positions.png')
+            plt.savefig(f'{self.output_dir}/Positions.pdf')
 
     def plot_positions(self, ax=None):
         '''
@@ -518,8 +518,8 @@ class Simulation:
                      (self.state == True) * f'({self.state}, {self.method})')
 
         if save:
-            plt.savefig(f'{self.output_dir}/Energies.png')
-            # print('Eplot.png')
+            plt.savefig(f'{self.output_dir}/Energies.pdf')
+            # print('Eplot.pdf')
 
     def plot_pair_correlation(self, ax=None):
         '''
@@ -548,7 +548,7 @@ class Simulation:
         ax.set_ylabel('Pair correlation g(r)')
 
         if save:
-            plt.savefig(f"{self.output_dir}/Pair_corr.png")
+            plt.savefig(f"{self.output_dir}/Pair_corr.pdf")
 
         
     def run_simulation(self, print_progress=True):
@@ -680,7 +680,7 @@ class SimulationBatch:
             sim.plot_pair_correlation(ax)
         ax.legend()
         plt.title(f'Pair correlation function with dt = {self.dt}, ({self.method})')
-        plt.savefig(f"{self.output_dir}/Pair_corr.png")
+        plt.savefig(f"{self.output_dir}/Pair_corr.pdf")
 
     def plot_positions(self):
         ''' Plot the positions for all saved simulations in one figure. '''
@@ -692,7 +692,7 @@ class SimulationBatch:
             ax = fig.add_subplot(1, n_sims, i+1,  projection='3d')
             sim.plot_positions(ax)
         plt.suptitle(f"Simulation evolution for dt = {self.dt}, ({self.method})")
-        plt.savefig(f"{self.output_dir}/Positions.png")
+        plt.savefig(f"{self.output_dir}/Positions.pdf")
     
     def plot_energy(self):
         ''' Plot the energy evolutions for all saved simulations in one figure. '''
@@ -706,7 +706,7 @@ class SimulationBatch:
                 ax.legend(loc="upper left", bbox_to_anchor=(1, 1))
         plt.suptitle(f"Energy evolutions, ({self.method})", fontsize=18)
         plt.tight_layout()
-        plt.savefig(f'{self.output_dir}/Energies.png')
+        plt.savefig(f'{self.output_dir}/Energies.pdf')
 
     def plot_phase_space(self):
         ''' Plot the phase space of simulations provided in 'params'. '''
@@ -728,7 +728,7 @@ class SimulationBatch:
         plt.ylabel('Temperature [n.u.]')
         plt.title('Phase space of Argon')
         plt.legend(handles=[handleg, handlel, handles])
-        plt.savefig(f'{self.output_dir}/Phase_space.png')
+        plt.savefig(f'{self.output_dir}/Phase_space.pdf')
 
     def simulate(self):
         '''
