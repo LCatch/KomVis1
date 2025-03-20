@@ -33,16 +33,8 @@ import scipy.signal
 
 class Simulation:
     ''' Class for a single simulation with set parameters '''
-    # TODO: are these constants necesary?
 
-    k_B = scipy.constants.k
-    A = 1e-10
-    SIGMA = 3.405 * A
-    # EPSILON = 119.8 * k_B
-    EPSILON = 119.8
-    M = 39.948 * scipy.constants.u
-
-    def __init__(self, rho=1, T=100,
+    def __init__(self, rho=1, temp=100,
                  n_particles=None, box_length=None, dims=3, timesteps=1000, dt=0.001, blocks=3,
                  state=None, method='Verlet', output_dir='plots'):
         ''' 
@@ -51,29 +43,32 @@ class Simulation:
         with 3x3x3 unit blocks. In this mode, density 'rho' and temperature 'T'
         (both in natural units) are used to determine the size and initial
         conditions of the simulation.
+
         If n_particles and box_length are specified, a simulation is set up with either
         a random initial particle distribution (for 3D), or a slightly
         randomized grid (for 2D). 
+
         Initial velicity distribution is determined from the temperature.
-        'method' can be Verlet or Euler
+        'method' can be Verlet or Euler.
+        'state' is used to store the phase of the simulation (gas/liquid/solid)
         '''
 
         # Set basic parameters
         self.dims = dims
         self.timesteps = timesteps
         self.dt = dt
-        self.T = T
+        self.temp = temp
         self.rho = rho
         self.state = state
-        self.blocks = blocks
 
         self.pair_corr_nbins = 100      # Used for pair correlation histogram
 
-        # Set more dynamic parameters
+        # Set n_particles and box_length based on parameters:
         if n_particles and box_length:  # custom size setup
             self.n_particles = n_particles
             self.box_length = box_length
-        elif blocks:                    # FCC setup
+            self.blocks = 0
+        elif blocks and dims == 3:      # FCC setup
             self.blocks = blocks
             self.n_particles = self.blocks ** self.dims * 4
                 # set box length box_length to based on the density
@@ -81,6 +76,7 @@ class Simulation:
         else:                           # default values (blocks=0 set explicitly)
             self.n_particles = 3
             self.box_length = 6
+            self.blocks = 0
 
         if output_dir:
             self.output_dir = output_dir
@@ -104,7 +100,7 @@ class Simulation:
             "box_length must be non-negative": self.box_length < 0,
             "n_particles must be non-negative": self.n_particles < 0,
             "rho must be non-negative": self.rho < 0,
-            "T must be non-negative": self.T < 0,
+            "T must be non-negative": self.temp < 0,
             "blocks must be non-negative": self.blocks < 0,
             "timesteps must be >= dt": self.timesteps < self.dt,
             "dt must be non-negative": self.dt < 0
@@ -131,7 +127,7 @@ class Simulation:
         self.final_pressure = 0
         self.ti_initial = 0
         self.current_dx = np.zeros([self.n_particles, self.n_particles])
-        self.current_r = np.zeros([self.n_particles, self.n_particles])
+        self.current_dist = np.zeros([self.n_particles, self.n_particles])
 
     def cleanup(self):
         ''' Delete unnecessary temporary arrays '''
@@ -140,7 +136,7 @@ class Simulation:
         self.distance_hist =[]
         self.pressures = []
         self.current_dx = []
-        self.current_r = []
+        self.current_dist = []
 
     def set_initial_positions_FCC(self):
         ''' 
@@ -148,6 +144,7 @@ class Simulation:
         and set it as the initial conditions. Only works in 3D
          
         '''
+            # FCC unit cell
         unit_block = np.array([[0, 0, 0], [0, 0.5, 0.5], [0.5, 0, 0.5], [0.5, 0.5, 0]]) + 0.001
         shift_lattice = []
         for i in range(self.blocks):
@@ -177,18 +174,22 @@ class Simulation:
         # Choose random positions in grid and translate to coordinates
         rnd_pos = np.random.choice(pos_available, size=self.n_particles, replace=False)
         self.positions[0,:,:] = np.array([rnd_pos // pos_available_1d, rnd_pos % pos_available_1d]).transpose() * 1.5 + 1
-        # self.positions += np.random.normal(0, 0.2, [self.n_particles, self.dims])
 
 
     def set_initial_velocities(self):
         ''' Set initial velocity distribution from a Gaussian distribution
         with mean = 0 and a variance T**2.'''
-        self.velocities[0, :, :] = np.random.normal(0, np.sqrt(self.T), [self.n_particles, self.dims])
+        self.velocities[0, :, :] = np.random.normal(0, np.sqrt(self.temp), [self.n_particles, self.dims])
 
     def set_initial_conditions(self):
         '''
         Wrapper function to set conditions based on dimensionality of
         the simulation.
+            If 2D: use a grid (set_initial_2Dgrid())
+            If blocks is set: use 3D fcc lattice
+            If 3D, but blocks=0: place particles in a random
+                distribution in the box. This could cause issues if
+                the particles spawn too close to each other.
         '''
         if self.blocks:
             self.set_initial_positions_FCC()
@@ -196,7 +197,6 @@ class Simulation:
             self.set_initial_2Dgrid()
         else:
             self.positions[0,:,:] = np.random.uniform(0, self.box_length, [self.n_particles, self.dims])
-            # self.velocities[0,:,:] = np.random.normal(0, 0.2, [self.n_particles, self.dims])
         self.set_initial_velocities()
 
     def set_current_dx(self, pos0):
@@ -209,66 +209,66 @@ class Simulation:
         x2 = np.transpose(x1, axes=[1,0,2])
         self.current_dx = (x2 - x1 + self.box_length/2) % self.box_length - self.box_length/2
     
-    def calc_current_r(self):
-        ''' TODO update
-        Calculate current_r, an n_particles x n_particles array, to hold
-        the absolute distances between particles based on 
-        current_dx.
-        (For proper function, you need to call set_current_dx first)
+    def calc_current_dist(self):
+        '''
+        Determine the absolute distances between particles from current_dx
+        and return result as an n_particles x n_particles array
         '''
         dx = self.current_dx
         return np.sqrt(np.sum(dx * dx, axis=2))
 
-    def measure_gradU(self, r):
-        ''' Measure the potential gradient based on current positions. '''
-        # r = self.current_r
+    def measure_gradU(self, dist):
+        '''
+        Measure the potential gradient based on the provided absolute
+        distance matrix dist (n_particles x n_particles).
+        '''
         with np.errstate(divide='ignore', invalid='ignore'):
-            grad_U = np.nan_to_num((4 * ( -12 * r ** (-13) + 6 * r ** (-7))), nan=0)
+            grad_U = np.nan_to_num((4 * ( -12 * dist ** (-13) + 6 * dist ** (-7))), nan=0)
         return grad_U
     
-    def measure_Epot(self, r):
-        ''' Measure the potential energy based on current positions. '''
-        r = self.current_r
+    def measure_Epot(self, dist):
+        ''' 
+        Measure the potential energy based on the provided absolute
+        distance matrix dist (n_particles x n_particles).
+        '''
         with np.errstate(divide='ignore', invalid='ignore'):
-            U = np.nan_to_num(4 * (r ** (-12) - r ** (-6)), nan=0)
+            U = np.nan_to_num(4 * (dist ** (-12) - dist ** (-6)), nan=0)
         return np.sum(U) / 2
 
     def measure_Ekin(self, vel):
         ''' Measure the kinetic energy based on current velocities. '''
         return 0.5 * np.sum(vel * vel)
 
-    def measure_current_forces(self, r):
+    def measure_current_forces(self, dist):
         '''
         Set forces, an n_particles x dims array, to hold the forces
         that each particle experiences in each direction based on
-        the current_dx and current_r
+        the current_dx and dist (n_particles x n_particles).
         '''
         dx = self.current_dx
-        grad_U = self.measure_gradU(r)
+        grad_U = self.measure_gradU(dist)
         force_mat = -1 * dx * np.repeat(grad_U[:, :, np.newaxis], repeats=self.dims, axis=2)
         self.forces = force_mat.sum(axis=1)
 
-    def measure_pressure(self, r):
+    def measure_pressure(self, dist):
         ''' 
-        Measure the current pressure of the system based on 
-        current_dx and current_r.
+        Measure the current pressure of the system based on the absolute
+        distances dist (n_particles x n_particles).
         '''
-        # r = self.current_r
         with np.errstate(divide='ignore', invalid='ignore'):
-            a = np.nan_to_num(((-12) * r**(-12) + 6 * r**(-6)), nan=0) # betwen brackets part
-        return self.rho * (self.T  - np.sum(a) / (3 * self.n_particles))
+            a = np.nan_to_num(((-12) * dist ** (-12) + 6 * dist ** (-6)), nan=0) # betwen brackets part
+        return self.rho * (self.temp  - np.sum(a) / (3 * self.n_particles))
 
     def measure_correlation(self, ti):
         ''' Measure and set the pair correlation histogram at a time ti. '''
-        r = self.current_r
+        dist = self.current_dist
 
-        hist, _ = np.histogram(r[np.tril_indices_from(r)], bins=self.pair_corr_nbins, range=[0.01, self.box_length/2])
+        hist, _ = np.histogram(dist[np.tril_indices_from(dist)], bins=self.pair_corr_nbins, range=[0.01, self.box_length/2])
         self.distance_hist[ti] = hist
     
     def rescale_velocities(self, ti, Ekin_target):
         ''' Rescale velocities in order to have E_kin = Ekin_target'''
         scale = np.sqrt(Ekin_target / self.measure_Ekin(self.velocities[ti]))
-        # scale = self.relaxation_scale(self.velocities[ti])
         self.velocities[ti] =  self.velocities[ti] * scale
 
     def relaxation_loop(self, ti, relax_steps, init_relax_steps):
@@ -282,7 +282,7 @@ class Simulation:
 
     def velocity_relaxation(self):
         ''' TODO '''
-        Ekin_target = (self.n_particles - 1) * (3 / 2) * self.T
+        Ekin_target = (self.n_particles - 1) * (3 / 2) * self.temp
         ti = 0
         E_diff = 1e6
 
@@ -309,17 +309,17 @@ class Simulation:
         '''
         MAX = 1e3
         self.set_current_dx(pos0)
-        r = self.calc_current_r()
+        dist = self.calc_current_dist()
 
         self.energies_kin[ti] = self.measure_Ekin(vel0)
-        self.energies_pot[ti] = self.measure_Epot(r)
-        self.pressures[ti] = self.measure_pressure(r)
+        self.energies_pot[ti] = self.measure_Epot(dist)
+        self.pressures[ti] = self.measure_pressure(dist)
         self.measure_correlation(ti)
 
-        self.measure_current_forces(r)
+        self.measure_current_forces(dist)
 
         self.positions[ti+1, :, :] = (pos0 + vel0 * self.dt) % self.box_length
-        self.velocities[ti+1,: , :] = np.clip(vel0 + self.forces * self.dt / self.m, a_min=-MAX, a_max=MAX)
+        self.velocities[ti+1,: , :] = np.clip(vel0 + self.forces * self.dt, a_min=-MAX, a_max=MAX)
 
 
     def Verlet_step(self, ti, pos0, vel0):
@@ -332,21 +332,21 @@ class Simulation:
 
         if ti == 0:
             self.set_current_dx(pos0)
-            self.current_r = self.calc_current_r()
-            self.measure_current_forces(self.current_r)
+            self.current_dist = self.calc_current_dist()
+            self.measure_current_forces(self.current_dist)
             self.forces_prev = self.forces
-        r = self.current_r
+        dist = self.current_dist
         self.energies_kin[ti] = self.measure_Ekin(vel0)
-        self.energies_pot[ti] = self.measure_Epot(r)
-        self.pressures[ti] = self.measure_pressure(r)
+        self.energies_pot[ti] = self.measure_Epot(dist)
+        self.pressures[ti] = self.measure_pressure(dist)
         self.measure_correlation(ti)
 
         newpos = (pos0 + vel0 * self.dt + self.dt ** 2 / 2 * self.forces_prev) % self.box_length
         self.set_current_dx(newpos)
-        self.current_r = self.calc_current_r()
+        self.current_dist = self.calc_current_dist()
         self.positions[ti+1, :, :] = newpos
 
-        self.measure_current_forces(self.current_r)
+        self.measure_current_forces(self.current_dist)
 
         F_tmp = self.forces
         self.velocities[ti+1, :, :] = np.clip(vel0 + self.dt / 2 * (F_tmp + self.forces_prev), a_min=-MAX, a_max=MAX)
@@ -375,7 +375,7 @@ class Simulation:
         peaks, _ = scipy.signal.find_peaks(self.pair_correlation_g,
                                 prominence=0.2)
         
-        if len(peaks) >= 4:
+        if len(peaks) >= 3:
             self.state = 'solid'
         elif len(peaks) <= 1:
             self.state = 'gas'
@@ -403,10 +403,10 @@ class Simulation:
             plt.figure()
             ax = plt.gca()
             plt.title('Simulation evolution of last {STEPS} steps\n' +
-                r'$\rho$' + f' = {self.rho}, T = {self.T}, dt = {self.dt}')
+                r'$\rho$' + f' = {self.rho}, T = {self.temp}, dt = {self.dt}')
             save = True
         else:
-            ax.set_title(f"{self.state}: " * int(self.state) + r"$\rho$" + f" = {self.rho}, T = {self.T}")
+            ax.set_title(f"{self.state}: " * int(self.state) + r"$\rho$" + f" = {self.rho}, T = {self.temp}")
 
         for ni in range(self.n_particles):
             ax.scatter(self.positions[-STEPS:, ni, 0], self.positions[-STEPS:, ni, 1], marker='.', s=2)
@@ -434,11 +434,11 @@ class Simulation:
         if not ax:
             plt.figure()
             ax = plt.axes(projection ='3d')
-            plt.title(r"$\rho$" + f" = {self.rho}, T = {self.T}" +
+            plt.title(r"$\rho$" + f" = {self.rho}, T = {self.temp}" +
                   f", dt = {self.dt}, steps = {self.timesteps}")
             save = True
         else:
-            ax.set_title(f"{self.state}: " + r"$\rho$" + f" = {self.rho}, T = {self.T}")
+            ax.set_title(f"{self.state}: " + r"$\rho$" + f" = {self.rho}, T = {self.temp}")
 
         for ni in range(self.n_particles):
             with plt.rc_context({'lines.markersize': 2}):
@@ -477,7 +477,7 @@ class Simulation:
         a new figure is created and saved.
         '''
 
-        E_target = (self.n_particles - 1) * (3 / 2) * self.T
+        E_target = (self.n_particles - 1) * (3 / 2) * self.temp
         t = np.arange(0, self.timesteps*self.dt, self.dt)[:-1]
         save=False
 
@@ -496,7 +496,7 @@ class Simulation:
         ax.set_xlabel('Time [n.u.]')
         ax.set_ylabel('Energy [n.u.]')
 
-        ax.set_title(r"$\rho$" + f' = {self.rho}, T = {self.T},' +
+        ax.set_title(r"$\rho$" + f' = {self.rho}, T = {self.temp},' +
                      f' dt = {self.dt}, steps = {self.timesteps}' +
                      (self.state == True) * f'({self.state})')
 
@@ -514,13 +514,13 @@ class Simulation:
         save = False
         if not ax:
             plt.figure()
-            plt.title(r"$\rho$" + f" = {self.rho}, T = {self.T}, dt = {self.dt}, steps = {self.timesteps}")
+            plt.title(r"$\rho$" + f" = {self.rho}, T = {self.temp}, dt = {self.dt}, steps = {self.timesteps}")
             ax = plt.gca()
             save = True
             label = ''
 
         else:   # axis provided
-            label = fr"$\rho$: {self.rho}, T = {self.T}"
+            label = fr"$\rho$: {self.rho}, T = {self.temp}"
             if self.state: 
                 label += f" ({self.state})"                 
             
@@ -596,15 +596,15 @@ class SimulationBatch:
         if state == 's':
             return 1.2, 0.5
 
-    def run_simulation(self, rho, T, state=''):
+    def run_simulation(self, rho, temp, state=''):
         if state:
             print(f"Running {state}... [{self.repeats} sim(s)]")
         else:
-            print(f"Running rho = {rho}, T = {T}... [{self.repeats} sim(s)]")
+            print(f"Running rho = {rho}, T = {temp}... [{self.repeats} sim(s)]")
         pressures = np.zeros(self.repeats)
         pair_correlations = []
         for i in range(self.repeats):
-            sim = Simulation(rho=rho, T=T, dt=self.dt, timesteps=self.timesteps, state=state,
+            sim = Simulation(rho=rho, temp=temp, dt=self.dt, timesteps=self.timesteps, state=state,
                              method=self.method, output_dir=self.output_dir)
             sim.run_simulation()
             pressures[i] = sim.final_pressure
@@ -627,7 +627,7 @@ class SimulationBatch:
 
         with open(self.summary_file, "a") as file:
             # file.write(f'{self.P:.{roundoff}f}')
-            file.write(f'rho = {rho}, T = {T}, ' +
+            file.write(f'rho = {rho}, T = {temp}, ' +
                        f'P = {self.P:.{roundoff}f} +/- {self.P_std:.{roundoff}f} ' +
                         f'({sim.state})\n')
 
@@ -694,9 +694,9 @@ class SimulationBatch:
     def plot_phase_space(self):
         ''' Plot the phase space of simulations provided in 'params'. '''
         mrk = {
-            'gas': {'marker': 'o', 'color': 'gold'},   # Circle, Blue
-            'liquid': {'marker': '^', 'color': 'deepskyblue'},  # Triangle up, Green
-            'solid': {'marker': 's', 'color': 'tomato'},    # Square, Red
+            'gas': {'marker': 'o', 'color': 'gold'},
+            'liquid': {'marker': '^', 'color': 'deepskyblue'},
+            'solid': {'marker': 's', 'color': 'tomato'},
         }
         handleg = Line2D([0], [0], label='gas', marker=mrk['gas']['marker'], color=mrk['gas']['color'], linestyle='')
         handlel = Line2D([0], [0], label='liquid', marker=mrk['liquid']['marker'], color=mrk['liquid']['color'], linestyle='')
@@ -705,7 +705,7 @@ class SimulationBatch:
         plt.figure()
         for sim in self.saved_sims:
             # if sim.final_pressure > 0:
-            plt.scatter(sim.rho, sim.T, marker=mrk[sim.state]['marker'],
+            plt.scatter(sim.rho, sim.temp, marker=mrk[sim.state]['marker'],
                             color=mrk[sim.state]['color'])
         plt.xlabel('Density [n.u.]')
         plt.ylabel('Temperature [n.u.]')
@@ -798,18 +798,29 @@ def custom():
 
     params = []
 
-    for i, rho in enumerate(np.linspace(0.1, 2, 8)):
+    # batch = SimulationBatch(repeats=10, dt=0.001, timesteps=1500, states='l', plot=True,
+    #                         # method='Verlet')
+
+    # PS TP 1
+    # for i, rho in enumerate(np.linspace(0.1, 0.6, 4)):
+    # # rho = 0.85
+    #     for j, T in enumerate(np.linspace(0.1, 2, 4)):
+    #         # if i + j < 10:
+    #         params.append(np.round([rho, T], decimals=3))
+
+    for i, rho in enumerate(np.linspace(0.25, 0.55, 8)):
     # rho = 0.85
-        for j, T in enumerate(np.linspace(0.1, 2, 8)):
+        for j, T in enumerate(np.linspace(0.6, 1.4, 8)):
             # if i + j < 10:
             params.append(np.round([rho, T], decimals=3))
 
-    batch = SimulationBatch(repeats=1, dt=0.01, timesteps=2000, states='', plot=True,
+
+    batch = SimulationBatch(repeats=1, dt=0.005, timesteps=2500, states='sgl', plot=True,
                             method='Verlet', params=params)
     # batch = SimulationBatch(repeats=1, dt=0.01, timesteps=2000, states='', plot=True,
-                            # method='Verlet', params=[[0.3, 3]])
+                            # method='Verlet', params=[[1, 0.7]])
     # batch = SimulationBatch(repeats=10, dt=0.001, timesteps=1500, states='l', plot=True,
-    #                         method='Verlet')
+                            # method='Verlet')
     batch.simulate()
 def select_option(opt):
     ''' Wrapper function for running a valid option 'opt' '''
